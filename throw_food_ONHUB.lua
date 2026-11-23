@@ -1,4 +1,4 @@
--- onhub | throw food for animals
+-- onhub
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local Players = game:GetService("Players")
@@ -37,6 +37,7 @@ local Icons = {
 	Throw = "rbxassetid://17127979242",
 	Farm = "rbxassetid://122634913225226",
 	Plot = "rbxassetid://105642295248032",
+	Areas = "rbxassetid://72945207836197",
 	Settings = "rbxassetid://117323693178558",
 }
 
@@ -191,7 +192,7 @@ local alive = true
 track(Gui.Destroying:Connect(function()
 	alive = false
 end))
--- hudcontroller sometimes hides everything in PlayerGui during cutscenes/throws
+-- game hides guis on throws
 track(Gui:GetPropertyChangedSignal("Enabled"):Connect(function()
 	if alive and not Gui.Enabled then
 		Gui.Enabled = true
@@ -596,7 +597,6 @@ local function addSurface(inst, off)
 	table.insert(surfaces, { inst = inst, off = off })
 end
 
--- compact top-left cooldown widget (above Index button)
 local insetY = GuiService:GetGuiInset().Y
 local HUD_POS = UDim2.fromOffset(14, (insetY > 0 and insetY or 58) + 12)
 
@@ -1262,7 +1262,9 @@ local Remotes = req(shared and shared:FindFirstChild("Remotes"))
 local ThrowMeterMath = req(shared and shared:FindFirstChild("ThrowMeterMath"))
 local BalanceCurve = req(shared and shared:FindFirstChild("BalanceCurve"))
 local LevelConfig = req(cfgDir and cfgDir:FindFirstChild("LevelConfig"))
+local AreasConfig = req(cfgDir and cfgDir:FindFirstChild("AreasConfig"))
 local GameConfig = req(cfgDir and cfgDir:FindFirstChild("GameConfig"))
+local IconImages = req(cfgDir and cfgDir:FindFirstChild("IconImages"))
 local AnimalEconomy = req(cfgDir and cfgDir:FindFirstChild("AnimalEconomy"))
 local RarityConfig = req(cfgDir and cfgDir:FindFirstChild("RarityConfig"))
 local FoodsConfig = req(cfgDir and cfgDir:FindFirstChild("FoodsConfig"))
@@ -1296,7 +1298,7 @@ local function getPowerVal()
 	local minP = math.min(LevelConfig.MinThrowPower, maxP)
 
 	if State.Target == "Nearest" then return minP end
-	if State.Target == "Rarest" or State.ThrowPower >= 100 then return 0 end -- server treats 0 as max unlocked power
+	if State.Target == "Rarest" or State.ThrowPower >= 100 then return 0 end
 
 	local a = math.clamp(State.ThrowPower / 100, 0, 1)
 	local val = math.floor(minP + a * (maxP - minP) + 0.5)
@@ -1427,7 +1429,6 @@ local function doThrow(keepFn)
 	syncPerfect()
 
 	if State.InstantThrow then
-		-- skip camera/animation, just fire remotes fast
 		local lineCF = getLineCF(false)
 		local moved = (hrp.Position - lineCF.Position).Magnitude > 10
 		local oldCF = hrp.CFrame
@@ -1546,7 +1547,6 @@ addToggle(PageFarm, 2, "Auto Cycle", "AutoCycle", function(on)
 end)
 addToggle(PageFarm, 3, "Auto Claim", "AutoClaim", saveCfg)
 
--- iy antiafk + disable game's 18m AFKRejoin server hop
 local oldIdled = {}
 local function resetGameIdle()
 	if AfkCtrl and type(AfkCtrl.IdleSeconds) == "function" and debug and type(debug.setupvalue) == "function" then
@@ -1613,6 +1613,369 @@ addCycleRow(PagePlot, 4, "Keep Rarity", "KeepRarity", {
 addToggle(PagePlot, 5, "Auto Buy Food", "AutoBuyFood")
 addToggle(PagePlot, 6, "Auto Upgrade Stand", "AutoUpStand")
 addToggle(PagePlot, 7, "Auto Upgrade Fence", "AutoUpFence")
+
+local PageAreas = makeTab("Areas", "Areas", Icons.Areas)
+
+do
+	local areaList = (AreasConfig and AreasConfig.List) or {}
+	local curAreaIdx = 1
+	local curAnimIdx = 1
+	local curAnimals = {}
+
+	local function fmtNum(n)
+		n = tonumber(n) or 0
+		local abs = math.abs(n)
+		local units = {
+			{ 1e69, "Dvg" }, { 1e66, "Uvg" }, { 1e63, "Vg" }, { 1e60, "Nod" },
+			{ 1e57, "Ocd" }, { 1e54, "Spd" }, { 1e51, "Sxd" }, { 1e48, "Qid" },
+			{ 1e45, "Qad" }, { 1e42, "Td" }, { 1e39, "Dd" }, { 1e36, "Ud" },
+			{ 1e33, "Dc" }, { 1e30, "No" }, { 1e27, "Oc" }, { 1e24, "Sp" },
+			{ 1e21, "Sx" }, { 1e18, "Qi" }, { 1e15, "Qd" }, { 1e12, "T" },
+			{ 1e9, "B" }, { 1e6, "M" }, { 1e3, "K" },
+		}
+		for _, u in ipairs(units) do
+			if abs >= u[1] then
+				return string.format("%.2f%s", n / u[1], u[2]):gsub("%.00", "")
+			end
+		end
+		return tostring(math.floor(n + 0.5))
+	end
+
+	local function powerForDist(d)
+		if not LevelConfig then return 0, 1 end
+		local lv = LevelConfig.LevelForDistance(d)
+		return LevelConfig.ThrowPowerForLevel(lv), lv
+	end
+
+	if #areaList > 0 and DataCtrl and LevelConfig then
+		local myPow = LevelConfig.ThrowPowerForLevel(DataCtrl:Get("Level") or 1)
+		for i, a in ipairs(areaList) do
+			local pStart = powerForDist(a.StartDistance or 0)
+			if myPow >= pStart then curAreaIdx = i end
+		end
+	end
+
+	local AreaBar = Instance.new("Frame")
+	AreaBar.Size = UDim2.new(1, 0, 0, 42)
+	AreaBar.BackgroundColor3 = Theme.Row
+	AreaBar.BorderSizePixel = 0
+	AreaBar.LayoutOrder = 1
+	AreaBar.ZIndex = 13
+	AreaBar.Parent = PageAreas
+	corner(AreaBar, 9, 0)
+	stroke(AreaBar, Theme.Border, 1, 0.5)
+	addSurface(AreaBar, 0.08)
+
+	local PrevArea = Instance.new("TextButton")
+	PrevArea.Size = UDim2.fromOffset(34, 42)
+	PrevArea.BackgroundTransparency = 1
+	PrevArea.Text = "<"
+	PrevArea.TextColor3 = Theme.Muted
+	PrevArea.FontFace = fBold
+	PrevArea.TextSize = 15
+	PrevArea.AutoButtonColor = false
+	PrevArea.ZIndex = 14
+	PrevArea.Parent = AreaBar
+
+	local NextArea = Instance.new("TextButton")
+	NextArea.Size = UDim2.fromOffset(34, 42)
+	NextArea.Position = UDim2.new(1, -34, 0, 0)
+	NextArea.BackgroundTransparency = 1
+	NextArea.Text = ">"
+	NextArea.TextColor3 = Theme.Muted
+	NextArea.FontFace = fBold
+	NextArea.TextSize = 15
+	NextArea.AutoButtonColor = false
+	NextArea.ZIndex = 14
+	NextArea.Parent = AreaBar
+
+	local AreaTitle = Instance.new("TextButton")
+	AreaTitle.Size = UDim2.new(1, -68, 1, 0)
+	AreaTitle.Position = UDim2.fromOffset(34, 0)
+	AreaTitle.BackgroundTransparency = 1
+	AreaTitle.Text = "Forest (1/20)"
+	AreaTitle.TextColor3 = Theme.Text
+	AreaTitle.FontFace = fBold
+	AreaTitle.TextSize = 14
+	AreaTitle.AutoButtonColor = false
+	AreaTitle.ZIndex = 14
+	AreaTitle.Parent = AreaBar
+
+	local StatsCard = Instance.new("Frame")
+	StatsCard.Size = UDim2.new(1, 0, 0, 62)
+	StatsCard.BackgroundColor3 = Theme.Row
+	StatsCard.BorderSizePixel = 0
+	StatsCard.LayoutOrder = 2
+	StatsCard.ZIndex = 13
+	StatsCard.Parent = PageAreas
+	corner(StatsCard, 9, 0)
+	stroke(StatsCard, Theme.Border, 1, 0.5)
+	addSurface(StatsCard, 0.08)
+
+	local AreaPowLbl = Instance.new("TextLabel")
+	AreaPowLbl.Size = UDim2.new(1, -110, 0, 22)
+	AreaPowLbl.Position = UDim2.fromOffset(12, 8)
+	AreaPowLbl.BackgroundTransparency = 1
+	AreaPowLbl.Text = "Power: 18 - 173"
+	AreaPowLbl.TextColor3 = Theme.AccentBright
+	AreaPowLbl.FontFace = fMono
+	AreaPowLbl.TextSize = 13
+	AreaPowLbl.TextXAlignment = Enum.TextXAlignment.Left
+	AreaPowLbl.ZIndex = 14
+	AreaPowLbl.Parent = StatsCard
+
+	local AreaMetaLbl = Instance.new("TextLabel")
+	AreaMetaLbl.Size = UDim2.new(1, -24, 0, 18)
+	AreaMetaLbl.Position = UDim2.fromOffset(12, 34)
+	AreaMetaLbl.BackgroundTransparency = 1
+	AreaMetaLbl.Text = "Min Level: 1  |  Distance: 5m - 173m"
+	AreaMetaLbl.TextColor3 = Theme.Muted
+	AreaMetaLbl.FontFace = fSemi
+	AreaMetaLbl.TextSize = 11
+	AreaMetaLbl.TextXAlignment = Enum.TextXAlignment.Left
+	AreaMetaLbl.ZIndex = 14
+	AreaMetaLbl.Parent = StatsCard
+
+	local ReachBadge = Instance.new("TextLabel")
+	ReachBadge.Size = UDim2.fromOffset(88, 22)
+	ReachBadge.Position = UDim2.new(1, -98, 0, 8)
+	ReachBadge.BackgroundColor3 = Theme.AccentSoft
+	ReachBadge.BackgroundTransparency = 0.2
+	ReachBadge.Text = "Unlocked"
+	ReachBadge.TextColor3 = Theme.AccentBright
+	ReachBadge.FontFace = fMono
+	ReachBadge.TextSize = 10
+	ReachBadge.ZIndex = 14
+	ReachBadge.Parent = StatsCard
+	corner(ReachBadge, 6, 0)
+
+	local AnimCard = Instance.new("Frame")
+	AnimCard.Size = UDim2.new(1, 0, 0, 188)
+	AnimCard.BackgroundColor3 = Theme.Row
+	AnimCard.BorderSizePixel = 0
+	AnimCard.LayoutOrder = 3
+	AnimCard.ZIndex = 13
+	AnimCard.Parent = PageAreas
+	corner(AnimCard, 9, 0)
+	stroke(AnimCard, Theme.Border, 1, 0.5)
+	addSurface(AnimCard, 0.08)
+
+	local Vpf = Instance.new("Frame")
+	Vpf.Name = "AnimalPreviewBox"
+	Vpf.Size = UDim2.fromOffset(162, 162)
+	Vpf.Position = UDim2.fromOffset(12, 13)
+	Vpf.BackgroundColor3 = Theme.Well
+	Vpf.BackgroundTransparency = 0.15
+	Vpf.BorderSizePixel = 0
+	Vpf.ZIndex = 14
+	Vpf.Parent = AnimCard
+	corner(Vpf, 9, 0)
+	local VpfStroke = stroke(Vpf, Theme.Border, 1.2, 0.3)
+
+	local AnimImg = Instance.new("ImageLabel")
+	AnimImg.Name = "AnimalIcon"
+	AnimImg.Size = UDim2.new(1, -12, 1, -12)
+	AnimImg.Position = UDim2.fromOffset(6, 6)
+	AnimImg.BackgroundTransparency = 1
+	AnimImg.Image = ""
+	AnimImg.ScaleType = Enum.ScaleType.Fit
+	AnimImg.ZIndex = 15
+	AnimImg.Parent = Vpf
+
+	local AnimNameLbl = Instance.new("TextLabel")
+	AnimNameLbl.Size = UDim2.new(1, -196, 0, 22)
+	AnimNameLbl.Position = UDim2.fromOffset(186, 14)
+	AnimNameLbl.BackgroundTransparency = 1
+	AnimNameLbl.Text = "Snail"
+	AnimNameLbl.TextColor3 = Theme.Text
+	AnimNameLbl.FontFace = fBold
+	AnimNameLbl.TextSize = 15
+	AnimNameLbl.TextXAlignment = Enum.TextXAlignment.Left
+	AnimNameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+	AnimNameLbl.ZIndex = 14
+	AnimNameLbl.Parent = AnimCard
+
+	local AnimRarLbl = Instance.new("TextLabel")
+	AnimRarLbl.Size = UDim2.new(1, -196, 0, 18)
+	AnimRarLbl.Position = UDim2.fromOffset(186, 37)
+	AnimRarLbl.BackgroundTransparency = 1
+	AnimRarLbl.Text = "Common"
+	AnimRarLbl.TextColor3 = Theme.Muted
+	AnimRarLbl.FontFace = fSemi
+	AnimRarLbl.TextSize = 12
+	AnimRarLbl.TextXAlignment = Enum.TextXAlignment.Left
+	AnimRarLbl.ZIndex = 14
+	AnimRarLbl.Parent = AnimCard
+
+	local AnimPowLbl = Instance.new("TextLabel")
+	AnimPowLbl.Size = UDim2.new(1, -196, 0, 20)
+	AnimPowLbl.Position = UDim2.fromOffset(186, 66)
+	AnimPowLbl.BackgroundTransparency = 1
+	AnimPowLbl.Text = "Power: ~28"
+	AnimPowLbl.TextColor3 = Theme.AccentBright
+	AnimPowLbl.FontFace = fMono
+	AnimPowLbl.TextSize = 12
+	AnimPowLbl.TextXAlignment = Enum.TextXAlignment.Left
+	AnimPowLbl.ZIndex = 14
+	AnimPowLbl.Parent = AnimCard
+
+	local AnimLvlLbl = Instance.new("TextLabel")
+	AnimLvlLbl.Size = UDim2.new(1, -196, 0, 18)
+	AnimLvlLbl.Position = UDim2.fromOffset(186, 88)
+	AnimLvlLbl.BackgroundTransparency = 1
+	AnimLvlLbl.Text = "Est. Level: 3"
+	AnimLvlLbl.TextColor3 = Theme.Muted
+	AnimLvlLbl.FontFace = fMono
+	AnimLvlLbl.TextSize = 11
+	AnimLvlLbl.TextXAlignment = Enum.TextXAlignment.Left
+	AnimLvlLbl.ZIndex = 14
+	AnimLvlLbl.Parent = AnimCard
+
+	local AnimIncLbl = Instance.new("TextLabel")
+	AnimIncLbl.Size = UDim2.new(1, -196, 0, 18)
+	AnimIncLbl.Position = UDim2.fromOffset(186, 108)
+	AnimIncLbl.BackgroundTransparency = 1
+	AnimIncLbl.Text = "Income: $1/s"
+	AnimIncLbl.TextColor3 = Theme.Amber
+	AnimIncLbl.FontFace = fMono
+	AnimIncLbl.TextSize = 11
+	AnimIncLbl.TextXAlignment = Enum.TextXAlignment.Left
+	AnimIncLbl.ZIndex = 14
+	AnimIncLbl.Parent = AnimCard
+
+	local AnimNav = Instance.new("Frame")
+	AnimNav.Size = UDim2.new(1, -198, 0, 30)
+	AnimNav.Position = UDim2.fromOffset(186, 144)
+	AnimNav.BackgroundColor3 = Theme.Well
+	AnimNav.BackgroundTransparency = 0.2
+	AnimNav.BorderSizePixel = 0
+	AnimNav.ZIndex = 14
+	AnimNav.Parent = AnimCard
+	corner(AnimNav, 7, 0)
+	stroke(AnimNav, Theme.Border, 1, 0.35)
+
+	local PrevAnim = Instance.new("TextButton")
+	PrevAnim.Size = UDim2.fromOffset(32, 30)
+	PrevAnim.BackgroundTransparency = 1
+	PrevAnim.Text = "<"
+	PrevAnim.TextColor3 = Theme.Muted
+	PrevAnim.FontFace = fBold
+	PrevAnim.TextSize = 14
+	PrevAnim.AutoButtonColor = false
+	PrevAnim.ZIndex = 15
+	PrevAnim.Parent = AnimNav
+
+	local NextAnim = Instance.new("TextButton")
+	NextAnim.Size = UDim2.fromOffset(32, 30)
+	NextAnim.Position = UDim2.new(1, -32, 0, 0)
+	NextAnim.BackgroundTransparency = 1
+	NextAnim.Text = ">"
+	NextAnim.TextColor3 = Theme.Muted
+	NextAnim.FontFace = fBold
+	NextAnim.TextSize = 14
+	NextAnim.AutoButtonColor = false
+	NextAnim.ZIndex = 15
+	NextAnim.Parent = AnimNav
+
+	local AnimCountLbl = Instance.new("TextLabel")
+	AnimCountLbl.Size = UDim2.new(1, -64, 1, 0)
+	AnimCountLbl.Position = UDim2.fromOffset(32, 0)
+	AnimCountLbl.BackgroundTransparency = 1
+	AnimCountLbl.Text = "1 / 8"
+	AnimCountLbl.TextColor3 = Theme.Text
+	AnimCountLbl.FontFace = fMono
+	AnimCountLbl.TextSize = 11
+	AnimCountLbl.ZIndex = 15
+	AnimCountLbl.Parent = AnimNav
+
+	local function load3D(modelName, rarCol)
+		local id = modelName and IconImages and IconImages.Animals and IconImages.Animals[modelName]
+		if id then
+			AnimImg.Image = "rbxassetid://" .. string.format("%.0f", tonumber(id) or 0)
+		else
+			AnimImg.Image = ""
+		end
+		VpfStroke.Color = rarCol or Theme.Border
+	end
+
+	local function renderAnimal()
+		local area = areaList[curAreaIdx]
+		if not area or #curAnimals == 0 then
+			AnimNameLbl.Text = "No animals"
+			AnimCountLbl.Text = "0 / 0"
+			load3D(nil)
+			return
+		end
+		curAnimIdx = ((curAnimIdx - 1) % #curAnimals) + 1
+		local entry = curAnimals[curAnimIdx]
+		local mName = entry.ModelName or entry.Name
+		local econ = AnimalEconomy and AnimalEconomy.Get and AnimalEconomy.Get(mName)
+		local rarName = (econ and econ.Rarity) or "Common"
+		local rarInfo = RarityConfig and RarityConfig.ByName and RarityConfig.ByName[rarName]
+
+		AnimNameLbl.Text = entry.Name or mName
+		AnimRarLbl.Text = rarName
+		AnimRarLbl.TextColor3 = (rarInfo and rarInfo.Color) or Theme.Muted
+
+		local rank = (econ and tonumber(econ.Rank)) or curAnimIdx
+		local estDist = (area.StartDistance or 0) + ((rank - 0.5) / math.max(1, #curAnimals)) * (area.Length or 168)
+		local estPow, estLv = powerForDist(estDist)
+		AnimPowLbl.Text = "Power: ~" .. fmtNum(estPow)
+		AnimLvlLbl.Text = "Est. Level: " .. tostring(estLv)
+		AnimIncLbl.Text = "Income: $" .. fmtNum(econ and econ.Income or 0) .. "/s"
+		AnimCountLbl.Text = string.format("%d / %d", curAnimIdx, #curAnimals)
+		load3D(mName, rarInfo and rarInfo.Color)
+	end
+
+	local function renderArea()
+		if #areaList == 0 then return end
+		curAreaIdx = ((curAreaIdx - 1) % #areaList) + 1
+		local area = areaList[curAreaIdx]
+		local sDist = area.StartDistance or 0
+		local eDist = sDist + (area.Length or 0)
+		local pStart, lvStart = powerForDist(sDist)
+		local pEnd = powerForDist(eDist)
+
+		AreaTitle.Text = string.format("%s (%d/%d)", area.Name or area.Key, curAreaIdx, #areaList)
+		AreaPowLbl.Text = string.format("Power: %s - %s", fmtNum(pStart), fmtNum(pEnd))
+		AreaMetaLbl.Text = string.format("Min Level: %d  |  Dist: %dm - %dm", lvStart, math.floor(sDist), math.floor(eDist))
+
+		local myPow = (DataCtrl and LevelConfig) and LevelConfig.ThrowPowerForLevel(DataCtrl:Get("Level") or 1) or 0
+		if myPow >= pStart then
+			ReachBadge.Text = "Unlocked"
+			ReachBadge.TextColor3 = Theme.AccentBright
+			ReachBadge.BackgroundColor3 = Theme.AccentSoft
+		else
+			ReachBadge.Text = "Need +" .. fmtNum(pStart - myPow)
+			ReachBadge.TextColor3 = Theme.Amber
+			ReachBadge.BackgroundColor3 = Theme.Well
+		end
+
+		curAnimals = {}
+		if AnimalEconomy and type(AnimalEconomy.List) == "table" then
+			for mName, info in pairs(AnimalEconomy.List) do
+				if type(info) == "table" and info.Area == area.Key then
+					table.insert(curAnimals, {
+						ModelName = mName,
+						Name = info.DisplayName or info.Name or mName,
+						Rank = tonumber(info.Rank) or 999,
+					})
+				end
+			end
+			table.sort(curAnimals, function(a, b) return a.Rank < b.Rank end)
+		end
+		curAnimIdx = 1
+		renderAnimal()
+	end
+
+	PrevArea.MouseButton1Click:Connect(function() curAreaIdx -= 1 renderArea() end)
+	NextArea.MouseButton1Click:Connect(function() curAreaIdx += 1 renderArea() end)
+	AreaTitle.MouseButton1Click:Connect(function() curAreaIdx += 1 renderArea() end)
+	PrevAnim.MouseButton1Click:Connect(function() curAnimIdx -= 1 renderAnimal() end)
+	NextAnim.MouseButton1Click:Connect(function() curAnimIdx += 1 renderAnimal() end)
+
+	renderArea()
+end
 
 local PageSettings = makeTab("Settings", "Settings", Icons.Settings)
 addToggle(PageSettings, 1, "Auto Save Config", "AutoSave", function(on)
