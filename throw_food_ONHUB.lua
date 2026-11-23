@@ -342,7 +342,7 @@ BrandRule.Parent = Sidebar
 
 local NavContainer = Instance.new("Frame")
 NavContainer.Name = "NavContainer"
-NavContainer.Size = UDim2.new(1, -16, 1, -106)
+NavContainer.Size = UDim2.new(1, -16, 1, -142)
 NavContainer.Position = UDim2.fromOffset(8, 66)
 NavContainer.BackgroundTransparency = 1
 NavContainer.ZIndex = 12
@@ -380,6 +380,108 @@ local NavLayout = Instance.new("UIListLayout")
 NavLayout.Padding = UDim.new(0, 5)
 NavLayout.SortOrder = Enum.SortOrder.LayoutOrder
 NavLayout.Parent = NavButtonsFrame
+
+local DISCORD_CODE = "J3EqkKCS2B"
+local DISCORD_URL = "https://discord.gg/" .. DISCORD_CODE
+local DISCORD_ICON = "rbxthumb://type=Asset&id=10367063084&w=150&h=150"
+
+local DiscordSideBtn = Instance.new("TextButton")
+DiscordSideBtn.Name = "DiscordBtn"
+DiscordSideBtn.Size = UDim2.new(1, -20, 0, 30)
+DiscordSideBtn.Position = UDim2.new(0, 10, 1, -70)
+DiscordSideBtn.BackgroundColor3 = Theme.AccentSoft
+DiscordSideBtn.BackgroundTransparency = 0.2
+DiscordSideBtn.Text = ""
+DiscordSideBtn.AutoButtonColor = false
+DiscordSideBtn.ZIndex = 13
+DiscordSideBtn.Parent = Sidebar
+corner(DiscordSideBtn, 7, 0)
+stroke(DiscordSideBtn, Theme.Accent, 1, 0.5)
+
+local DiscordIconWrap = Instance.new("Frame")
+DiscordIconWrap.Name = "IconWrap"
+DiscordIconWrap.Size = UDim2.fromOffset(18, 18)
+DiscordIconWrap.Position = UDim2.new(0, 9, 0.5, -9)
+DiscordIconWrap.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
+DiscordIconWrap.BorderSizePixel = 0
+DiscordIconWrap.ZIndex = 14
+DiscordIconWrap.Parent = DiscordSideBtn
+corner(DiscordIconWrap, 6, 0)
+
+local DiscordSideIcon = Instance.new("ImageLabel")
+DiscordSideIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+DiscordSideIcon.Size = UDim2.fromOffset(15, 12)
+DiscordSideIcon.Position = UDim2.fromScale(0.5, 0.5)
+DiscordSideIcon.BackgroundTransparency = 1
+DiscordSideIcon.Image = DISCORD_ICON
+DiscordSideIcon.ScaleType = Enum.ScaleType.Stretch
+DiscordSideIcon.ZIndex = 15
+DiscordSideIcon.Parent = DiscordIconWrap
+corner(DiscordSideIcon, 3, 0)
+
+local DiscordSideLbl = Instance.new("TextLabel")
+DiscordSideLbl.Size = UDim2.new(1, -36, 1, 0)
+DiscordSideLbl.Position = UDim2.fromOffset(33, 0)
+DiscordSideLbl.BackgroundTransparency = 1
+DiscordSideLbl.Text = "Discord"
+DiscordSideLbl.TextColor3 = Theme.AccentBright
+DiscordSideLbl.FontFace = fSemi
+DiscordSideLbl.TextSize = 12
+DiscordSideLbl.TextXAlignment = Enum.TextXAlignment.Left
+DiscordSideLbl.ZIndex = 14
+DiscordSideLbl.Parent = DiscordSideBtn
+
+local discordCooldown = false
+DiscordSideBtn.MouseButton1Click:Connect(function()
+	if discordCooldown then return end
+	discordCooldown = true
+
+	local copied = false
+	pcall(function()
+		local clip = setclipboard or toclipboard or (Clipboard and Clipboard.set)
+		if type(clip) == "function" then
+			clip(DISCORD_URL)
+			copied = true
+		end
+	end)
+
+	if not isMobile then
+		local req = (type(request) == "function" and request)
+			or (type(http_request) == "function" and http_request)
+			or (syn and type(syn.request) == "function" and syn.request)
+			or (http and type(http.request) == "function" and http.request)
+		if req then
+			task.spawn(function()
+				local ok, res = pcall(req, {
+					Url = "http://127.0.0.1:6463/rpc?v=1",
+					Method = "POST",
+					Headers = {
+						["Content-Type"] = "application/json",
+						["Origin"] = "https://discord.com",
+					},
+					Body = HttpService:JSONEncode({
+						cmd = "INVITE_BROWSER",
+						nonce = HttpService:GenerateGUID(false),
+						args = { code = DISCORD_CODE },
+					}),
+				})
+				if ok and res and (res.StatusCode == 200 or res.Success) then
+					DiscordSideLbl.Text = "Opened!"
+				end
+			end)
+		end
+	end
+
+	DiscordSideLbl.Text = copied and "Copied!" or "J3EqkKCS2B"
+	DiscordSideLbl.TextColor3 = Theme.Text
+	task.delay(2.2, function()
+		if DiscordSideLbl and DiscordSideLbl.Parent then
+			DiscordSideLbl.Text = "Discord"
+			DiscordSideLbl.TextColor3 = Theme.AccentBright
+		end
+		discordCooldown = false
+	end)
+end)
 
 local FooterLbl = Instance.new("TextLabel")
 FooterLbl.Size = UDim2.new(1, -20, 0, 26)
