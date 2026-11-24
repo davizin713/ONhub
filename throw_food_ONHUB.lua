@@ -38,6 +38,7 @@ local Icons = {
 	Farm = "rbxassetid://122634913225226",
 	Plot = "rbxassetid://105642295248032",
 	Areas = "rbxassetid://72945207836197",
+	Events = "rbxassetid://105170609500209",
 	Settings = "rbxassetid://117323693178558",
 }
 
@@ -99,6 +100,13 @@ local State = {
 	AutoUpStand = false,
 	AutoUpFence = false,
 
+	AutoCraft = false,
+	CraftOrder = "Best",
+	AutoEventClaim = false,
+	AutoUseSandwich = false,
+	UseSandwich = "Best",
+	AutoSandwichStack = false,
+
 	AutoSave = true,
 	CooldownHud = true,
 	BgTransparency = 8,
@@ -110,9 +118,10 @@ local State = {
 }
 
 local SavedKeys = {
-	"InstantThrow", "AlwaysPerfect", "Target", "ThrowDelay", "ThrowPower",
-	"AutoClaim", "AntiAfk", "TrainTime", "ThrowCatches",
-	"KeepMutated", "KeepRarity",
+	"AutoThrow", "InstantThrow", "AlwaysPerfect", "Target", "ThrowDelay", "ThrowPower",
+	"AutoTrain", "AutoCycle", "AutoClaim", "AntiAfk", "TrainTime", "ThrowCatches",
+	"AutoEquipBest", "AutoSell", "KeepMutated", "KeepRarity", "AutoBuyFood", "AutoUpStand", "AutoUpFence",
+	"AutoCraft", "CraftOrder", "AutoEventClaim", "AutoUseSandwich", "UseSandwich", "AutoSandwichStack",
 	"AutoSave", "CooldownHud", "BgTransparency", "BorderGlow", "GlowSpeed", "UiScale", "ScaleLabel",
 }
 
@@ -602,7 +611,7 @@ local HUD_POS = UDim2.fromOffset(14, (insetY > 0 and insetY or 58) + 12)
 
 local HudBox = Instance.new("Frame")
 HudBox.Name = "CooldownHud"
-HudBox.Size = UDim2.fromOffset(192, 104)
+HudBox.Size = UDim2.fromOffset(192, 128)
 HudBox.Position = HUD_POS
 HudBox.BackgroundColor3 = Theme.Window
 HudBox.BackgroundTransparency = State.BgTransparency / 100
@@ -735,6 +744,20 @@ HudStatLbl.Parent = HudBox
 corner(HudStatLbl, 6, 0)
 addSurface(HudStatLbl, 0.12)
 
+local HudTotalLbl = Instance.new("TextLabel")
+HudTotalLbl.Size = UDim2.new(1, -20, 0, 21)
+HudTotalLbl.Position = UDim2.fromOffset(10, 99)
+HudTotalLbl.BackgroundColor3 = Theme.Well
+HudTotalLbl.BackgroundTransparency = 0.2
+HudTotalLbl.Text = "Total Catches: 0"
+HudTotalLbl.TextColor3 = Theme.Muted
+HudTotalLbl.FontFace = fMono
+HudTotalLbl.TextSize = 10
+HudTotalLbl.ZIndex = 21
+HudTotalLbl.Parent = HudBox
+corner(HudTotalLbl, 6, 0)
+addSurface(HudTotalLbl, 0.12)
+
 local function updateAlpha()
 	local base = math.clamp(State.BgTransparency / 100, 0, 0.70)
 	Window.BackgroundTransparency = base
@@ -748,6 +771,7 @@ local function anyRunning()
 	return State.AutoThrow or State.AutoTrain or State.AutoCycle
 		or State.AutoEquipBest or State.AutoSell or State.AutoBuyFood
 		or State.AutoUpStand or State.AutoUpFence
+		or State.AutoCraft or State.AutoEventClaim or State.AutoUseSandwich or State.AutoSandwichStack
 end
 
 local function updateStatus()
@@ -964,6 +988,7 @@ local function addToggle(parent, order, text, key, cb)
 		State[key] = nxt
 		draw(nxt, false)
 		updateStatus()
+		if key ~= "AutoSave" then saveCfg() end
 		if cb then cb(nxt) end
 	end)
 end
@@ -1271,6 +1296,8 @@ local FoodsConfig = req(cfgDir and cfgDir:FindFirstChild("FoodsConfig"))
 local StandsConfig = req(cfgDir and cfgDir:FindFirstChild("StandsConfig"))
 local FenceConfig = req(cfgDir and cfgDir:FindFirstChild("FenceConfig"))
 local IndexRewardsConfig = req(cfgDir and cfgDir:FindFirstChild("IndexRewardsConfig"))
+local ThanksgivingConfig = req(cfgDir and cfgDir:FindFirstChild("ThanksgivingConfig"))
+local SandwichStackConfig = req(cfgDir and cfgDir:FindFirstChild("SandwichStackConfig"))
 
 local DataCtrl = req(controllers:FindFirstChild("DataController"))
 local ClientState = req(controllers:FindFirstChild("ClientState"))
@@ -1417,7 +1444,7 @@ local function doThrow(keepFn)
 	local readyAt = lp:GetAttribute("ThrowReadyAt")
 	if type(readyAt) == "number" then
 		local rem = readyAt - workspace:GetServerTimeNow()
-		if rem > 0.02 and not waitWhile(rem + 0.05, keepFn) then return end
+		if rem > 0.02 and not waitWhile(rem + 0.01, keepFn) then return end
 	end
 
 	local char = lp.Character
@@ -1428,40 +1455,47 @@ local function doThrow(keepFn)
 	pushPower(true)
 	syncPerfect()
 
+	local function pickSandwich()
+		if not (State.AutoUseSandwich and Remotes and DataCtrl) then return nil end
+		local tg = DataCtrl:Get("Thanksgiving")
+		local sw = type(tg) == "table" and tg.Sandwiches
+		if type(sw) ~= "table" then return nil end
+		if State.UseSandwich == "Best" then
+			for _, k in ipairs({ "Mega", "Big", "Regular" }) do
+				if (tonumber(sw[k]) or 0) > 0 then return k end
+			end
+		elseif (tonumber(sw[State.UseSandwich]) or 0) > 0 then
+			return State.UseSandwich
+		end
+		return nil
+	end
+
 	if State.InstantThrow then
 		local lineCF = getLineCF(false)
-		local moved = (hrp.Position - lineCF.Position).Magnitude > 10
-		local oldCF = hrp.CFrame
-
-		if moved then
+		if (hrp.Position - lineCF.Position).Magnitude > 10 then
 			hrp.AssemblyLinearVelocity = Vector3.zero
 			hrp.CFrame = lineCF
-			task.wait(0.15)
-			if not alive or not keepFn() then
-				hrp.AssemblyLinearVelocity = Vector3.zero
-				hrp.CFrame = oldCF
-				return
-			end
+			task.wait(0.25)
+			if not alive or not keepFn() then return end
 		end
 
 		local okS, res = pcall(Remotes.Invoke, "Throw_Start")
-		if moved and hrp.Parent then
-			hrp.AssemblyLinearVelocity = Vector3.zero
-			hrp.CFrame = oldCF
-		end
-
 		if not (okS and type(res) == "table" and res.Ok) then
 			if type(res) == "table" and res.Reason == "TooFar" then
 				hrp.AssemblyLinearVelocity = Vector3.zero
 				hrp.CFrame = lineCF
-				task.wait(0.2)
+				task.wait(0.25)
 			else
-				task.wait(0.3)
+				task.wait(0.2)
 			end
 			return
 		end
 
 		remoteThrowing = true
+		local swPick = pickSandwich()
+		if swPick then
+			pcall(Remotes.Invoke, "Throw_UseSandwich", swPick)
+		end
 		pcall(function() Remotes.Event("Throw_MeterStarted"):FireServer() end)
 
 		local meter = 0
@@ -1977,6 +2011,214 @@ do
 	renderArea()
 end
 
+local PageEvents = makeTab("Events", "Events", Icons.Events)
+
+local EvCard = Instance.new("Frame")
+EvCard.Size = UDim2.new(1, 0, 0, 64)
+EvCard.BackgroundColor3 = Theme.Row
+EvCard.BorderSizePixel = 0
+EvCard.LayoutOrder = 1
+EvCard.ZIndex = 13
+EvCard.Parent = PageEvents
+corner(EvCard, 9, 0)
+stroke(EvCard, Theme.Border, 1, 0.5)
+addSurface(EvCard, 0.08)
+
+local EvTitle = Instance.new("TextLabel")
+EvTitle.Size = UDim2.new(1, -124, 0, 20)
+EvTitle.Position = UDim2.fromOffset(12, 8)
+EvTitle.BackgroundTransparency = 1
+EvTitle.Text = "Thanksgiving Event"
+EvTitle.TextColor3 = Theme.Text
+EvTitle.FontFace = fBold
+EvTitle.TextSize = 13
+EvTitle.TextXAlignment = Enum.TextXAlignment.Left
+EvTitle.ZIndex = 14
+EvTitle.Parent = EvCard
+
+local EvFeastBadge = Instance.new("TextLabel")
+EvFeastBadge.Size = UDim2.fromOffset(106, 20)
+EvFeastBadge.Position = UDim2.new(1, -116, 0, 8)
+EvFeastBadge.BackgroundColor3 = Theme.Well
+EvFeastBadge.BackgroundTransparency = 0.2
+EvFeastBadge.Text = "Feast: --:--"
+EvFeastBadge.TextColor3 = Theme.Amber
+EvFeastBadge.FontFace = fMono
+EvFeastBadge.TextSize = 10
+EvFeastBadge.ZIndex = 14
+EvFeastBadge.Parent = EvCard
+corner(EvFeastBadge, 6, 0)
+
+local EvStatsLbl = Instance.new("TextLabel")
+EvStatsLbl.Size = UDim2.new(1, -24, 0, 20)
+EvStatsLbl.Position = UDim2.fromOffset(12, 36)
+EvStatsLbl.BackgroundTransparency = 1
+EvStatsLbl.Text = "Ing: 0/0/0  |  M:0 B:0 R:0"
+EvStatsLbl.TextColor3 = Theme.Muted
+EvStatsLbl.FontFace = fMono
+EvStatsLbl.TextSize = 11
+EvStatsLbl.TextXAlignment = Enum.TextXAlignment.Left
+EvStatsLbl.ZIndex = 14
+EvStatsLbl.Parent = EvCard
+
+addToggle(PageEvents, 2, "Auto Craft Sandwiches", "AutoCraft")
+addSegmented(PageEvents, 3, "Craft Order", "CraftOrder", { "Best", "Mega", "Big", "Regular" }, saveCfg)
+addToggle(PageEvents, 4, "Auto Claim Rewards", "AutoEventClaim")
+addToggle(PageEvents, 5, "Auto Use Sandwich", "AutoUseSandwich")
+addSegmented(PageEvents, 6, "Use Sandwich", "UseSandwich", { "Best", "Mega", "Big", "Regular" }, saveCfg)
+addToggle(PageEvents, 7, "Auto Sandwich Stack", "AutoSandwichStack")
+
+local function refreshEventCard()
+	local periodSec = ((ThanksgivingConfig and ThanksgivingConfig.PeriodMinutes) or 30) * 60
+	local runSec = ((ThanksgivingConfig and ThanksgivingConfig.RunMinutes) or 5) * 60
+	local tNow = workspace:GetServerTimeNow()
+	local inPeriod = tNow % periodSec
+	if inPeriod < runSec then
+		local rem = math.max(0, math.floor(runSec - inPeriod))
+		EvFeastBadge.Text = string.format("FEAST %d:%02d", math.floor(rem / 60), rem % 60)
+		EvFeastBadge.TextColor3 = Theme.AccentBright
+		EvFeastBadge.BackgroundColor3 = Theme.AccentSoft
+	else
+		local rem = math.max(0, math.floor(periodSec - inPeriod))
+		EvFeastBadge.Text = string.format("Feast %d:%02d", math.floor(rem / 60), rem % 60)
+		EvFeastBadge.TextColor3 = Theme.Amber
+		EvFeastBadge.BackgroundColor3 = Theme.Well
+	end
+
+	local tg = DataCtrl and DataCtrl:Get("Thanksgiving")
+	if type(tg) == "table" then
+		local ing = type(tg.Ingredients) == "table" and tg.Ingredients or {}
+		local sw = type(tg.Sandwiches) == "table" and tg.Sandwiches or {}
+		EvStatsLbl.Text = string.format(
+			"Ing: %d/%d/%d  |  M:%d  B:%d  R:%d",
+			tonumber(ing.SweetPotato) or 0,
+			tonumber(ing.Cornbread) or 0,
+			tonumber(ing.CranberrySauce) or 0,
+			tonumber(sw.Mega) or 0,
+			tonumber(sw.Big) or 0,
+			tonumber(sw.Regular) or 0
+		)
+	end
+end
+
+if Remotes then
+	local function bindSandwichMenu(menu)
+		if not (menu and menu:IsA("ScreenGui")) then return end
+		local function tryArm()
+			if not alive or not State.AutoUseSandwich or not menu.Enabled then return end
+			local tg = DataCtrl and DataCtrl:Get("Thanksgiving")
+			local sw = type(tg) == "table" and tg.Sandwiches
+			if type(sw) ~= "table" then return end
+			local pick = nil
+			if State.UseSandwich == "Best" then
+				for _, k in ipairs({ "Mega", "Big", "Regular" }) do
+					if (tonumber(sw[k]) or 0) > 0 then pick = k break end
+				end
+			elseif (tonumber(sw[State.UseSandwich]) or 0) > 0 then
+				pick = State.UseSandwich
+			end
+			if not pick then return end
+			task.delay(0.05, function()
+				if not alive or not State.AutoUseSandwich or not menu.Enabled then return end
+				if menu:GetAttribute("Armed") ~= pick then
+					menu:SetAttribute("Armed", pick)
+					pcall(Remotes.Invoke, "Throw_UseSandwich", pick)
+				end
+			end)
+		end
+		track(menu:GetPropertyChangedSignal("Enabled"):Connect(tryArm))
+		tryArm()
+	end
+
+	local existingSwMenu = pg:FindFirstChild("SandwichThrowMenu")
+	if existingSwMenu then bindSandwichMenu(existingSwMenu) end
+	track(pg.ChildAdded:Connect(function(ch)
+		if ch.Name == "SandwichThrowMenu" then bindSandwichMenu(ch) end
+	end))
+
+	local okD, dropEv = pcall(Remotes.Event, "SandwichStack_Drops")
+	if okD and dropEv then
+		track(dropEv.OnClientEvent:Connect(function(payload)
+			if not alive or not State.AutoSandwichStack or type(payload) ~= "table" then return end
+			local drops = payload.Drops
+			if type(drops) ~= "table" then return end
+			for _, d in ipairs(drops) do
+				if type(d) == "table" and d.Id ~= nil and d.Kind ~= "Pinecone" then
+					local at = tonumber(d.LandAt or d.At) or workspace:GetServerTimeNow()
+					local delaySec = math.max(0.05, at - workspace:GetServerTimeNow())
+					local dropId = d.Id
+					local dropX = tonumber(d.X) or 0
+					task.delay(delaySec, function()
+						if alive and State.AutoSandwichStack then
+							pcall(Remotes.Invoke, "SandwichStack_Catch", dropId, dropX, at)
+						end
+					end)
+				end
+			end
+		end))
+	end
+end
+
+task.spawn(function()
+	local joinedRun = nil
+	while alive do
+		if Window.Visible and curTab == "Events" then
+			refreshEventCard()
+		end
+
+		if Remotes and DataCtrl then
+			local tg = DataCtrl:Get("Thanksgiving")
+			if type(tg) == "table" then
+				if State.AutoCraft then
+					local ing = type(tg.Ingredients) == "table" and tg.Ingredients or {}
+					local totalIng = (tonumber(ing.SweetPotato) or 0)
+						+ (tonumber(ing.Cornbread) or 0)
+						+ (tonumber(ing.CranberrySauce) or 0)
+					local need = { Mega = 9, Big = 6, Regular = 3 }
+					local orderKey = nil
+					if State.CraftOrder == "Best" then
+						if totalIng >= 9 then orderKey = "Mega"
+						elseif totalIng >= 6 then orderKey = "Big"
+						elseif totalIng >= 3 then orderKey = "Regular" end
+					elseif totalIng >= (need[State.CraftOrder] or 3) then
+						orderKey = State.CraftOrder
+					end
+					if orderKey then
+						pcall(Remotes.Invoke, "Thanksgiving_Action", "Cook", orderKey)
+						task.wait(0.25)
+					end
+				end
+
+				if State.AutoEventClaim then
+					local every = (ThanksgivingConfig and ThanksgivingConfig.RewardEvery) or 5
+					local made = tonumber(tg.Made) or 0
+					local claimed = tonumber(tg.RewardsClaimed) or 0
+					if math.floor(made / every) > claimed then
+						pcall(Remotes.Invoke, "Thanksgiving_Action", "Claim")
+						task.wait(0.25)
+					end
+				end
+			end
+
+			if State.AutoSandwichStack then
+				local startAttr = (SandwichStackConfig and SandwichStackConfig.MinigameStartAttribute) or "SandwichStackMinigameStart"
+				local endAttr = (SandwichStackConfig and SandwichStackConfig.MinigameEndAttribute) or "SandwichStackMinigameEnd"
+				local runAttr = (SandwichStackConfig and SandwichStackConfig.RunKeyAttribute) or "SandwichStackRun"
+				local sAt = workspace:GetAttribute(startAttr)
+				local eAt = workspace:GetAttribute(endAttr)
+				local rKey = workspace:GetAttribute(runAttr)
+				local nowS = workspace:GetServerTimeNow()
+				if type(sAt) == "number" and type(eAt) == "number" and nowS >= sAt and nowS < eAt and rKey ~= joinedRun then
+					joinedRun = rKey
+					pcall(Remotes.Invoke, "SandwichStack_Join")
+				end
+			end
+		end
+
+		task.wait(1.0)
+	end
+end)
+
 local PageSettings = makeTab("Settings", "Settings", Icons.Settings)
 addToggle(PageSettings, 1, "Auto Save Config", "AutoSave", function(on)
 	if on then saveCfg() end
@@ -2281,6 +2523,10 @@ track(RunService.RenderStepped:Connect(function(dt)
 			HudCdLbl.TextColor3 = Theme.AccentBright
 		end
 
+		local st = DataCtrl and DataCtrl:Get("Stats")
+		local totalCaught = (type(st) == "table" and tonumber(st.TotalCaught)) or (DataCtrl and tonumber(DataCtrl:Get("Throws"))) or 0
+		HudTotalLbl.Text = "Total Catches: " .. tostring(math.floor(totalCaught))
+
 		if State.AutoCycle then
 			local isTrain = (phase == "Train")
 
@@ -2550,7 +2796,7 @@ task.spawn(function()
 					for _, v in pairs(animals) do
 						if type(v) == "table" and v.Placed ~= true then
 							pcall(Remotes.Invoke, "Plot_EquipBest")
-							task.wait(0.2)
+							task.wait(0.45)
 							break
 						end
 					end
